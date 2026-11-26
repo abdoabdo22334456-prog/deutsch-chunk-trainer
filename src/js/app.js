@@ -15,6 +15,7 @@ import { libraryScreen } from './screens/library.js';
 import { audioEngine } from './audioEngine.js';
 import { trophyManager } from './trophies.js';
 import { reviewScheduler } from './scheduler.js';
+import { initI18n, applyDOMLocalization } from './i18n.js';
 
 const routes = [
   { name: 'home', pattern: /^\/?$/, screen: homeScreen },
@@ -76,7 +77,7 @@ function updateChrome(name) {
   const pill = document.getElementById('streak-pill');
   const streak = store.streak();
   pill.innerHTML = String(
-    html`${icon('flame')}${streak > 0 ? html`<span><b>${streak}</b> يوم متواصل</span>` : html`<span>ابدأ سلسلتك</span>`}`,
+    html`${icon('flame')}${streak > 0 ? html`<span>${streak} يوم متواصل</span>` : html`<span>ابدأ سلسلتك</span>`}`,
   );
   pill.title = streak > 0 ? `${streak} يوم متواصل` : 'لسه مفيش أيام متواصلة';
 
@@ -116,6 +117,7 @@ function route() {
     cleanup = match.screen.mount?.(view, context) || null;
     current = match;
     updateChrome(match.name);
+    applyDOMLocalization(document.body);
   } catch (error) {
     console.error(error);
     view.innerHTML = String(failScreen(error));
@@ -184,11 +186,12 @@ async function boot() {
   if (new URLSearchParams(location.search).get('debug') === '1') window.__store = store;
 
   window.addEventListener('hashchange', route);
+  initI18n(() => route());
   window.addEventListener('beforeunload', () => {
-    store.flush();
+    store.flushSync();
   });
   window.addEventListener('pagehide', () => {
-    store.flush();
+    store.flushSync();
   });
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) store.flush();
@@ -197,6 +200,13 @@ async function boot() {
   route();
 
   store.onChange = () => updateChrome(current?.name || 'home');
+
+  if (store.recoveredFromBackup) {
+    setTimeout(() => {
+      toast('تم استرجاع تقدمك تلقائيًا من آخر نسخة احتياطية سليمة 🛡️', 'spark');
+      store.recoveredFromBackup = false;
+    }, 800);
+  }
 
   if (store.freshImport) {
     setTimeout(() => {

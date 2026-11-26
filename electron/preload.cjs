@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('chunkAPI', {
   getChunks: () => ipcRenderer.invoke('data:chunks'),
   loadState: () => ipcRenderer.invoke('state:load'),
   saveState: (state) => ipcRenderer.invoke('state:save', state),
+  saveStateSync: (state) => ipcRenderer.sendSync('state:save-sync', state),
   exportState: () => ipcRenderer.invoke('state:export'),
   importState: () => ipcRenderer.invoke('state:import'),
   resetState: () => ipcRenderer.invoke('state:reset'),

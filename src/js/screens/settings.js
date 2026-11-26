@@ -54,6 +54,17 @@ export const settingsScreen = {
           <div class="stack" style="--gap:18px">
             <section class="set-group">
               <div class="set-group-head"><h2>التفضيلات</h2><p>اليومي والواجهة</p></div>
+              <div class="set-row">
+                <div>
+                  <div class="set-label">لغة الواجهة · Interface Language · Sprache</div>
+                  <div class="set-desc">تبديل فوري ودقيق للواجهة بالكامل بين العربية والإنجليزية والألمانية</div>
+                </div>
+                <div class="lang-switcher is-large" role="group" aria-label="Interface Language">
+                  <button type="button" class="lang-btn" data-lang-switch="ar">🇪🇬 العربية</button>
+                  <button type="button" class="lang-btn" data-lang-switch="en">🇬🇧 English</button>
+                  <button type="button" class="lang-btn" data-lang-switch="de">🇩🇪 Deutsch</button>
+                </div>
+              </div>
               ${switchRow('theme', 'الوضع الليلي', 'ألوان هادية للعين في المذاكرة بالليل', settings.theme === 'dark')}
               ${rangeRow(
                 'dailyGoal',
@@ -270,8 +281,8 @@ export const settingsScreen = {
               <div class="set-group-head"><h2>عن التطبيق</h2><p>دفتر الشانكس — نسخة محلية بالكامل</p></div>
               <div class="set-row">
                 <div>
-                  <div class="set-label" id="app-version">الإصدار 1.0.0</div>
-                  <div class="set-desc">1500 جملة من A1 لـ C1، مقسمة 5 مستويات، بمسار 6 خطوات وجدول تكرار.</div>
+                  <div class="set-label" id="app-version">الإصدار 2.1.0</div>
+                  <div class="set-desc">1500 جملة من A1 لـ C1، مقسمة 5 مستويات، بمسار 6 خطوات ومكتبة مصورة شاملة.</div>
                 </div>
                 <a class="btn btn-ghost btn-sm" href="#/method">شوف المنهج</a>
               </div>

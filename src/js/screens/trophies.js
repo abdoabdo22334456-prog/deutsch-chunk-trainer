@@ -75,7 +75,7 @@ export const trophiesScreen = {
           <!-- Streak & Mastery Card -->
           <div class="bento-card bento-stat">
             <span class="bento-stat-num">${store.streak()} <small>أيام</small></span>
-            <span class="bento-stat-lbl">أطول سلسلة متواصلة</span>
+            <span class="bento-stat-lbl">السلسلة الحالية المتواصلة</span>
             <div class="bento-chips-row">
               <span class="chip">${rankInfo.overallMastered} جملة متقنة</span>
             </div>

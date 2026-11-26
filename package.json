@@ -1,7 +1,7 @@
 {
   "name": "chunk-trainer",
   "productName": "دفتر الشانكس",
-  "version": "1.4.0",
+  "version": "2.1.0",
   "description": "مدرب الشانكس الألمانية — 1500 جملة من A1 إلى C1 بمسار من 6 خطوات وحفظ تلقائي للتقدم",
   "main": "electron/main.cjs",
   "scripts": {

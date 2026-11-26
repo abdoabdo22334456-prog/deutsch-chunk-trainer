@@ -152,6 +152,7 @@ const emptyRecord = () => ({
 const defaultSettings = () => ({
   dailyGoal: 25,
   theme: 'light',
+  lang: 'ar',
   tts: true,
   ttsRate: 0.95,
   voice: '',
@@ -160,7 +161,7 @@ const defaultSettings = () => ({
 });
 
 const defaultState = () => ({
-  v: 1,
+  v: 2,
   createdAt: nowIso(),
   updatedAt: nowIso(),
   settings: defaultSettings(),
@@ -169,6 +170,7 @@ const defaultState = () => ({
   chunks: {},
   groups: {},
   reviews: [],
+  library: { read: [], fav: [] },
   meta: { importedObsidian: false, importedAt: null, importedCount: 0 },
 });
 
@@ -227,6 +229,8 @@ class Store {
     this.data = null;
     this.state = defaultState();
     this.loaded = false;
+    this._dirty = false;
+    this.recoveredFromBackup = false;
     this.onSaved = null;
     this.onChange = null;
     this.api = typeof window !== 'undefined' ? window.chunkAPI : undefined;
@@ -276,6 +280,7 @@ class Store {
     if (this.api) {
       const loaded = await this.api.loadState();
       loadedState = loaded?.state || null;
+      this.recoveredFromBackup = Boolean(loaded?.recoveredFromBackup);
       this.paths = loaded;
     } else {
       try {
@@ -292,30 +297,47 @@ class Store {
     this.freshImport = false;
     if (!this.state.pointer) this.state.pointer = this.firstUnfinishedPointer();
     this.loaded = true;
-    this.save();
+    // Only persist on boot if we actually loaded & migrated existing data (never overwrite missing/corrupt state with blank)
+    if (loadedState && loadedState.v !== this.state.v) {
+      this._dirty = true;
+      this.save();
+    }
     return this.state;
   }
 
   normalize(loaded) {
     if (!loaded || typeof loaded !== 'object') return defaultState();
     const base = defaultState();
+    // Migrate legacy localStorage library read/fav & lang into unified progress.json (Zero Data Loss)
+    let migratedLib = loaded.library;
+    if (!migratedLib && typeof localStorage !== 'undefined') {
+      try {
+        const rawLib = JSON.parse(localStorage.getItem('chunk-trainer-library-v1') || 'null');
+        if (rawLib) {
+          migratedLib = {
+            read: Array.isArray(rawLib.read) ? rawLib.read : [],
+            fav: Array.isArray(rawLib.fav) ? rawLib.fav : [],
+          };
+        }
+      } catch {}
+    }
     const state = {
       ...base,
       ...loaded,
+      v: 2,
       settings: { ...base.settings, ...(loaded.settings || {}) },
       days: loaded.days || {},
       chunks: loaded.chunks || {},
       groups: loaded.groups || {},
       reviews: loaded.reviews || [],
+      library: {
+        read: Array.isArray(migratedLib?.read) ? [...new Set(migratedLib.read)] : [],
+        fav: Array.isArray(migratedLib?.fav) ? [...new Set(migratedLib.fav)] : [],
+      },
       meta: { ...base.meta, ...(loaded.meta || {}) },
       pointer: loaded.pointer || null,
     };
     for (const [id, rec] of Object.entries(state.chunks)) {
-      // Clean up spurious B2/C1 entries caused by leaked modals if they have no real user content
-      if ((id.startsWith('B2-') || id.startsWith('C1-')) && (!rec.vary?.items?.length && !rec.notes && !rec.mastery?.done)) {
-        delete state.chunks[id];
-        continue;
-      }
       state.chunks[id] = this.normalizeRecord(rec);
     }
     // Auto-migrate any existing chunk variations into group variations (Zero Data Loss)
@@ -382,11 +404,13 @@ class Store {
 
   async persist() {
     this.state.updatedAt = nowIso();
+    this._dirty = false;
     try {
       if (this.api) await this.api.saveState(this.state);
       else if (typeof localStorage !== 'undefined') localStorage.setItem('chunk-trainer-state', JSON.stringify(this.state));
       this.onSaved?.(this.state.updatedAt);
     } catch (error) {
+      this._dirty = true;
       console.error('save failed', error);
       this.onSaved?.(null);
     }
@@ -394,13 +418,34 @@ class Store {
 
   async flush() {
     this.save.cancel();
+    if (!this._dirty && this.loaded) return;
     await this.persist();
+  }
+
+  flushSync() {
+    this.save.cancel();
+    if (!this._dirty || !this.loaded) return;
+    this.state.updatedAt = nowIso();
+    this._dirty = false;
+    try {
+      if (this.api?.saveStateSync) this.api.saveStateSync(this.state);
+      else if (typeof localStorage !== 'undefined') localStorage.setItem('chunk-trainer-state', JSON.stringify(this.state));
+    } catch {}
   }
 
   touch() {
     this._dueCache = null;
+    this._dirty = true;
     this.save();
     this.onChange?.();
+  }
+
+  setLibraryState(readSet, favSet) {
+    this.state.library = {
+      read: [...readSet],
+      fav: [...favSet],
+    };
+    this.touch();
   }
 
   setSetting(key, value) {
@@ -1285,6 +1330,7 @@ class Store {
 
   async exportData() {
     if (!this.api) return { ok: false };
+    await this.flush();
     return this.api.exportState();
   }
 

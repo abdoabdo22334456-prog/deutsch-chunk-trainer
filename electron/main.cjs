@@ -161,7 +161,7 @@ async function readJson(file, fallback = null) {
 }
 
 async function writeJsonAtomic(file, value) {
-  const tmp = `${file}.${process.pid}.tmp`;
+  const tmp = `${file}.${process.pid}.${randomUUID().slice(0, 8)}.tmp`;
   await fsp.mkdir(path.dirname(file), { recursive: true });
   const handle = await fsp.open(tmp, 'w');
   try {
@@ -170,16 +170,56 @@ async function writeJsonAtomic(file, value) {
   } finally {
     await handle.close();
   }
-  await fsp.rename(tmp, file).catch(async () => {
-    // Antivirus / OneDrive can briefly lock the target; copy and drop the temp file.
+  let renamed = false;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await fsp.rename(tmp, file);
+      renamed = true;
+      break;
+    } catch (err) {
+      if (attempt < 4 && (err.code === 'EPERM' || err.code === 'EBUSY' || err.code === 'EACCES')) {
+        await delay(20 * Math.pow(2, attempt));
+      } else {
+        break;
+      }
+    }
+  }
+  if (!renamed) {
     await fsp.copyFile(tmp, file);
-    await fsp.rm(tmp, { force: true });
-  });
+    await fsp.rm(tmp, { force: true }).catch(() => {});
+  }
 }
 
-async function snapshotBackup() {
+async function readStateWithRecovery() {
+  try {
+    const text = await fsp.readFile(STATE_FILE, 'utf8');
+    return { state: JSON.parse(text), recoveredFromBackup: false };
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      return { state: null, recoveredFromBackup: false };
+    }
+    // Preserve corrupt file and auto-recover from latest valid backup
+    try {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+      await fsp.copyFile(STATE_FILE, path.join(USER_DIR, `progress.corrupt.${stamp}.json`));
+    } catch {}
+    try {
+      const files = (await fsp.readdir(BACKUP_DIR)).filter((f) => f.endsWith('.json')).sort().reverse();
+      for (const file of files) {
+        const candidate = await readJson(path.join(BACKUP_DIR, file));
+        if (candidate && typeof candidate === 'object' && candidate.chunks) {
+          await writeJsonAtomic(STATE_FILE, candidate);
+          return { state: candidate, recoveredFromBackup: true, backupFile: file };
+        }
+      }
+    } catch {}
+    return { state: null, recoveredFromBackup: false, corruptPreserved: true };
+  }
+}
+
+async function snapshotBackup({ force = false } = {}) {
   const now = Date.now();
-  if (now - lastBackupAt < 5 * 60 * 1000) return;
+  if (!force && now - lastBackupAt < 5 * 60 * 1000) return;
   const existing = await readJson(STATE_FILE);
   if (!existing) return;
   lastBackupAt = now;
@@ -187,7 +227,7 @@ async function snapshotBackup() {
   const stamp = new Date(now).toISOString().replace(/[:.]/g, '-').slice(0, 19);
   await fsp.copyFile(STATE_FILE, path.join(BACKUP_DIR, `progress-${stamp}.json`));
   const files = (await fsp.readdir(BACKUP_DIR)).filter((f) => f.endsWith('.json')).sort();
-  for (const stale of files.slice(0, Math.max(0, files.length - 12))) {
+  for (const stale of files.slice(0, Math.max(0, files.length - 16))) {
     await fsp.rm(path.join(BACKUP_DIR, stale), { force: true });
   }
 }
@@ -369,14 +409,19 @@ function registerIpc() {
     return { ok: true };
   });
 
-  ipcMain.handle('data:chunks', async () => readJson(DATA_FILE));
-
-  ipcMain.handle('state:load', async () => {
-    const state = await readJson(STATE_FILE);
-    return { state, path: STATE_FILE, dir: USER_DIR };
+  ipcMain.handle('data:chunks', async (event) => {
+    if (!trustedRenderer(event)) return null;
+    return readJson(DATA_FILE);
   });
 
-  ipcMain.handle('state:save', async (_event, state) => {
+  ipcMain.handle('state:load', async (event) => {
+    if (!trustedRenderer(event)) return { state: null };
+    const { state, recoveredFromBackup, backupFile, corruptPreserved } = await readStateWithRecovery();
+    return { state, path: STATE_FILE, dir: USER_DIR, recoveredFromBackup, backupFile, corruptPreserved };
+  });
+
+  ipcMain.handle('state:save', async (event, state) => {
+    if (!trustedRenderer(event)) return { ok: false, error: 'untrusted' };
     if (!state || typeof state !== 'object') return { ok: false, error: 'bad-state' };
     const job = async () => {
       await snapshotBackup();
@@ -388,9 +433,33 @@ function registerIpc() {
     return writeChain;
   });
 
-  ipcMain.handle('state:export', async () => {
+  ipcMain.on('state:save-sync', (event, state) => {
+    if (!trustedRenderer(event) || !state || typeof state !== 'object') {
+      event.returnValue = false;
+      return;
+    }
+    try {
+      const payload = { ...state, updatedAt: new Date().toISOString() };
+      const tmp = `${STATE_FILE}.${process.pid}.sync.tmp`;
+      fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+      fs.writeFileSync(tmp, JSON.stringify(payload, null, 2), 'utf8');
+      try {
+        fs.renameSync(tmp, STATE_FILE);
+      } catch {
+        fs.copyFileSync(tmp, STATE_FILE);
+        fs.rmSync(tmp, { force: true });
+      }
+      event.returnValue = true;
+    } catch {
+      event.returnValue = false;
+    }
+  });
+
+  ipcMain.handle('state:export', async (event) => {
+    if (!trustedRenderer(event)) return { ok: false };
+    await writeChain;
     const result = await dialog.showSaveDialog(win, {
-      title: 'تصدير التقدم',
+      title: 'تصدير التقدم / Export Progress',
       defaultPath: path.join(app.getPath('documents'), `chunk-progress-${new Date().toISOString().slice(0, 10)}.json`),
       filters: [{ name: 'JSON', extensions: ['json'] }],
     });
@@ -400,9 +469,10 @@ function registerIpc() {
     return { ok: true, filePath: result.filePath };
   });
 
-  ipcMain.handle('state:import', async () => {
+  ipcMain.handle('state:import', async (event) => {
+    if (!trustedRenderer(event)) return { ok: false };
     const result = await dialog.showOpenDialog(win, {
-      title: 'استيراد ملف تقدم',
+      title: 'استيراد ملف تقدم / Import Progress',
       properties: ['openFile'],
       filters: [{ name: 'JSON', extensions: ['json'] }],
     });
@@ -411,14 +481,24 @@ function registerIpc() {
     if (!imported || typeof imported !== 'object' || !imported.chunks) {
       return { ok: false, error: 'الملف مش ملف تقدم صالح' };
     }
-    await writeJsonAtomic(STATE_FILE, imported);
-    return { ok: true, state: imported, filePath: result.filePaths[0] };
+    const job = async () => {
+      await snapshotBackup({ force: true });
+      await writeJsonAtomic(STATE_FILE, imported);
+      return { ok: true, state: imported, filePath: result.filePaths[0] };
+    };
+    writeChain = writeChain.then(job, job);
+    return writeChain;
   });
 
-  ipcMain.handle('state:reset', async () => {
-    await snapshotBackup();
-    await fsp.rm(STATE_FILE, { force: true });
-    return { ok: true };
+  ipcMain.handle('state:reset', async (event) => {
+    if (!trustedRenderer(event)) return { ok: false };
+    const job = async () => {
+      await snapshotBackup({ force: true });
+      await fsp.rm(STATE_FILE, { force: true });
+      return { ok: true };
+    };
+    writeChain = writeChain.then(job, job);
+    return writeChain;
   });
 
   ipcMain.handle('shell:open-data-folder', async () => {
@@ -633,7 +713,15 @@ if (!hasLock) {
   });
 
   app.on('window-all-closed', () => app.quit());
-  app.on('before-quit', () => transcriptionJob?.child?.kill());
+  let isQuitting = false;
+  app.on('before-quit', (event) => {
+    transcriptionJob?.child?.kill();
+    if (!isQuitting) {
+      isQuitting = true;
+      event.preventDefault();
+      Promise.resolve(writeChain).catch(() => {}).finally(() => app.exit(0));
+    }
+  });
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
   });

@@ -1,5 +1,6 @@
 import { html, icon, clamp } from '../utils.js';
 import { toast } from '../ui.js';
+import { store } from '../store.js';
 
 const STORAGE_KEY = 'chunk-trainer-library-v1';
 const PAGE_SIZE = 36;
@@ -8,6 +9,12 @@ let cachedManifest = null;
 let loadPromise = null;
 
 export function loadUserLibState() {
+  if (store?.loaded && store.state?.library) {
+    return {
+      read: new Set(Array.isArray(store.state.library.read) ? store.state.library.read : []),
+      fav: new Set(Array.isArray(store.state.library.fav) ? store.state.library.fav : []),
+    };
+  }
   try {
     const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || 'null');
     return {
@@ -20,6 +27,9 @@ export function loadUserLibState() {
 }
 
 export function saveUserLibState(st) {
+  if (store?.loaded) {
+    store.setLibraryState(st.read, st.fav);
+  }
   try {
     localStorage.setItem(
       STORAGE_KEY,
@@ -84,9 +94,10 @@ export function renderLibraryCard(item, idx, topicMap, userState) {
   const isRead = userState.read.has(item.id);
   const isFav = userState.fav.has(item.id);
   const topic = topicMap.get(item.topicId);
+  const isLandscape = (item.width || 0) > (item.height || 0) * 1.05;
   return html`
     <article
-      class="lib-card ${isRead ? 'is-read' : ''} ${isFav ? 'is-fav' : ''}"
+      class="lib-card ${isRead ? 'is-read' : ''} ${isFav ? 'is-fav' : ''} ${isLandscape ? 'is-landscape' : ''}"
       data-card-idx="${idx}"
       data-id="${item.id}"
     >
@@ -318,16 +329,22 @@ export function openLibraryLightbox({ items, startIndex = 0, manifest, userState
       event.preventDefault();
       closeLibraryLightbox();
     } else if (event.key === 'ArrowLeft') {
-      if (currentIndex < items.length - 1) {
+      const isRtl = document.documentElement.dir !== 'ltr';
+      const delta = isRtl ? 1 : -1;
+      const nextIdx = currentIndex + delta;
+      if (nextIdx >= 0 && nextIdx < items.length) {
         event.preventDefault();
-        currentIndex += 1;
+        currentIndex = nextIdx;
         zoomLevel = 1;
         paint();
       }
     } else if (event.key === 'ArrowRight') {
-      if (currentIndex > 0) {
+      const isRtl = document.documentElement.dir !== 'ltr';
+      const delta = isRtl ? -1 : 1;
+      const nextIdx = currentIndex + delta;
+      if (nextIdx >= 0 && nextIdx < items.length) {
         event.preventDefault();
-        currentIndex -= 1;
+        currentIndex = nextIdx;
         zoomLevel = 1;
         paint();
       }
@@ -472,7 +489,7 @@ export const libraryScreen = {
           </div>
         `);
       } else {
-        gridEl.innerHTML = String(slice.map((item, idx) => renderLibraryCard(item, idx, topicMap, userState)));
+        gridEl.innerHTML = slice.map((item, idx) => String(renderLibraryCard(item, idx, topicMap, userState))).join('');
       }
 
       if (moreWrap) {

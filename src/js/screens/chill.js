@@ -390,16 +390,17 @@ export const chillScreen = {
       }
     };
 
-    // Keyboard Shortcuts
+    // Keyboard Shortcuts (RTL & LTR aware)
     keyHandler = (e) => {
       if (!inSession) return;
       if (e.target.matches('input, textarea')) return;
+      const isRtl = document.documentElement.dir !== 'ltr';
       if (e.key === 'ArrowLeft') {
-        const nextBtn = root.querySelector('#chill-btn-next');
-        if (nextBtn) nextBtn.click();
+        const btn = root.querySelector(isRtl ? '#chill-btn-next' : '#chill-btn-prev');
+        if (btn) btn.click();
       } else if (e.key === 'ArrowRight') {
-        const prevBtn = root.querySelector('#chill-btn-prev');
-        if (prevBtn) prevBtn.click();
+        const btn = root.querySelector(isRtl ? '#chill-btn-prev' : '#chill-btn-next');
+        if (btn) btn.click();
       } else if (e.code === 'Space') {
         e.preventDefault();
         const normalBtn = root.querySelector('#chill-play-normal');
